@@ -102,6 +102,7 @@ import {
   bulkCancelStreamsSchema,
   createStreamPayloadWithAllowedAssetsSchema,
   listEventsQuerySchema,
+  stellarAccountIdSchema,
   recipientAccountIdSchema,
   senderAccountIdSchema,
   streamIdSchema,
@@ -147,7 +148,7 @@ const listStreamsQuerySchema = z.object({
         message: `status must be one of: ${STREAM_STATUSES.join(", ")}`,
       },
     ),
-  recipient: z.string().trim().optional(),
+  recipient: stellarAccountIdSchema.optional(),
   sender: z.string().trim().optional(),
   asset: z.string().trim().optional(),
   assetCode: z
@@ -1021,10 +1022,18 @@ app.get(
     }
     const query = parsedQuery.data;
 
-    const rawStreams = await withAddressCache(
-      `streams:recipient:${address}`,
-      () => listStreamsByRecipient(address, query.sort ?? "createdAt", query.order ?? "desc"),
-    );
+    let rawStreams;
+    try {
+      rawStreams = await withAddressCache(
+        `streams:recipient:${address}`,
+        () => listStreamsByRecipient(address, query.sort ?? "createdAt", query.order ?? "desc"),
+      );
+    } catch {
+      sendApiError(req, res, 503, "Failed to retrieve recipient streams.", {
+        code: "RECIPIENT_STREAMS_QUERY_FAILED",
+      });
+      return;
+    }
 
     const now = nowInSeconds();
     let data = rawStreams.map((stream) => ({
@@ -1168,7 +1177,7 @@ app.get("/api/streams/:id", readLimiter, (req: Request, res: Response) => {
 app.get(
   "/api/recipients/:accountId/streams",
   readLimiter,
-  (req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     const parsedParams = recipientAccountIdSchema.safeParse({
       accountId: req.params.accountId,
     });
@@ -1187,8 +1196,18 @@ app.get(
     }
     const query = parsedQuery.data;
 
+    let streams;
+    try {
+      streams = listStreamsByRecipient(accountId, query.sort ?? "createdAt", query.order ?? "desc");
+    } catch {
+      sendApiError(req, res, 503, "Failed to retrieve recipient streams.", {
+        code: "RECIPIENT_STREAMS_QUERY_FAILED",
+      });
+      return;
+    }
+
     const now = nowInSeconds();
-    let data = listStreamsByRecipient(accountId, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
+    let data = streams.map((stream) => ({
       ...stream,
       progress: calculateProgress(stream, now),
     }));
